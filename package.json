@@ -1,0 +1,35 @@
+{
+  "name": "fmcg-warehouse-inventory",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ultra-Fast Offline-First FMCG Warehouse Inventory, POS, Price Fingerprint Audit & CEO Reporting System",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/client/styles.css -o ./dist/public/styles.css --minify",
+    "build:client": "node scripts/build-client.mjs",
+    "build": "npm run build:css && npm run build:client",
+    "start": "tsx src/server/index.ts",
+    "dev": "npm run build && tsx src/server/index.ts",
+    "test": "tsx scripts/verify-system.ts"
+  },
+  "dependencies": {
+    "cors": "2.8.6",
+    "esbuild": "0.28.2",
+    "express": "4.21.2",
+    "lucide-react": "0.562.0",
+    "postcss": "8.4.49",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "recharts": "3.10.1",
+    "tailwindcss": "3.4.17",
+    "tsx": "4.23.13"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "typescript": "5.9.3"
+  }
+}

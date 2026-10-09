@@ -1,0 +1,9 @@
+{
+  "name": "Ogunleye FMCG Warehouse & Executive Inventory System",
+  "short_name": "FMCG Warehouse",
+  "description": "Offline-First FMCG Warehouse Inventory, Multi-Unit POS, Staff Price Fingerprint Audit & Executive Reporting System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#059669"
+}
