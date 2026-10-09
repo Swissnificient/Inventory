@@ -201,7 +201,7 @@ app.post('/api/demo/reset', (_req, res) => {
 const publicDir = path.resolve('dist/public');
 app.use(express.static(publicDir));
 
-app.use((_req: express.Request, res: express.Response) => {
+app.use((_req: any, res: any) => {
   res.sendFile(path.join(publicDir, 'index.html'));
 });
 

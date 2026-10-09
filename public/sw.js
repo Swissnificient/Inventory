@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fmcg-warehouse-pwa-v2';
+const CACHE_NAME = 'fmcg-warehouse-pwa-v3';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',

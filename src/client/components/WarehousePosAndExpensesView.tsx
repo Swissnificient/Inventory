@@ -18,15 +18,15 @@ import {
   getUnitPrice
 } from '../../shared/fmcg-utils';
 import {
-  ShoppingCart,
-  Search,
   Trash2,
   CheckCircle2,
   CreditCard,
   Landmark,
   Banknote,
   Clock,
-  Plus
+  Plus,
+  FilePlus2,
+  Receipt
 } from 'lucide-react';
 
 interface WarehousePosAndExpensesViewProps {
@@ -47,7 +47,7 @@ interface WarehousePosAndExpensesViewProps {
 
 interface CartDraftItem {
   key: string;
-  product: Product;
+  productId: string;
   unitTier: 'CARTON' | 'PACK' | 'PIECE';
   quantity: number;
 }
@@ -83,20 +83,17 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
   onSettleCredit,
   onCreateExpense
 }) => {
-  const [mode, setMode] = useState<'POS' | 'INVOICES' | 'EXPENSES'>('POS');
-  const [posSearch, setPosSearch] = useState('');
-  const [cart, setCart] = useState<CartDraftItem[]>([
-    {
-      key: `${products[0]?.id}-CARTON`,
-      product: products[0],
-      unitTier: 'CARTON',
-      quantity: 10
-    }
-  ]);
+  const [mode, setMode] = useState<'RECORD_SALE' | 'EXPENSES'>('RECORD_SALE');
 
-  // Customer & Payment state
-  const [customerName, setCustomerName] = useState('Walk-in Wholesale Buyer');
-  const [customerPhone, setCustomerPhone] = useState('08030001122');
+  // Direct Sale Form State
+  const [selectedProductId, setSelectedProductId] = useState<string>(products[0]?.id || '');
+  const [selectedUnit, setSelectedUnit] = useState<'CARTON' | 'PACK' | 'PIECE'>('CARTON');
+  const [quantityInput, setQuantityInput] = useState<string>('5');
+  const [extraItems, setExtraItems] = useState<CartDraftItem[]>([]);
+
+  // Customer & Payment State
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('TRANSFER');
   const [posTerminalRef, setPosTerminalRef] = useState('MONIEPOINT-POS-01');
   const [transferBank, setTransferBank] = useState('Zenith Bank');
@@ -105,58 +102,75 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
   const [creditPaidNow, setCreditPaidNow] = useState('0');
   const [saleBanner, setSaleBanner] = useState<string | null>(null);
 
-  // Expense form state
+  // Expense Form State
   const [expCategory, setExpCategory] = useState<ExpenseCategory>('Diesel & Generator Fuel');
   const [expDesc, setExpDesc] = useState('');
   const [expAmount, setExpAmount] = useState('');
 
-  const filteredProducts = useMemo(() => {
-    const q = posSearch.trim().toLowerCase();
-    if (!q) return products;
-    return products.filter(
-      p =>
-        p.name.toLowerCase().includes(q) ||
-        p.sku.toLowerCase().includes(q) ||
-        p.category.toLowerCase().includes(q)
-    );
-  }, [products, posSearch]);
+  const selectedProduct = useMemo(
+    () => products.find(p => p.id === selectedProductId) || products[0],
+    [products, selectedProductId]
+  );
 
-  const addToCart = (product: Product, unitTier: 'CARTON' | 'PACK' | 'PIECE', qtyToAdd = 1) => {
-    const key = `${product.id}-${unitTier}`;
-    setCart(prev => {
+  // Combine current form selection with any extra added items so the user can either:
+  // 1) Just pick a product + quantity and click "Save Sales Record" directly, OR
+  // 2) Click "+ Add Another Item" to build a multi-item invoice!
+  const effectiveDraftList = useMemo(() => {
+    const qty = Math.max(0, Math.floor(Number(quantityInput) || 0));
+    const list = [...extraItems];
+    if (selectedProduct && qty > 0) {
+      const key = `${selectedProduct.id}-${selectedUnit}`;
+      const existingIdx = list.findIndex(i => i.key === key);
+      if (existingIdx >= 0) {
+        list[existingIdx] = {
+          ...list[existingIdx],
+          quantity: list[existingIdx].quantity + qty
+        };
+      } else {
+        list.push({
+          key,
+          productId: selectedProduct.id,
+          unitTier: selectedUnit,
+          quantity: qty
+        });
+      }
+    }
+    return list;
+  }, [extraItems, selectedProduct, selectedUnit, quantityInput]);
+
+  const handleAddLineItem = () => {
+    if (!selectedProduct) return;
+    const qty = Math.max(1, Math.floor(Number(quantityInput) || 1));
+    const key = `${selectedProduct.id}-${selectedUnit}`;
+    setExtraItems(prev => {
       const existing = prev.find(i => i.key === key);
       if (existing) {
-        return prev.map(i =>
-          i.key === key ? { ...i, product, quantity: i.quantity + qtyToAdd } : i
-        );
+        return prev.map(i => (i.key === key ? { ...i, quantity: i.quantity + qty } : i));
       }
-      return [...prev, { key, product, unitTier, quantity: qtyToAdd }];
+      return [...prev, { key, productId: selectedProduct.id, unitTier: selectedUnit, quantity: qty }];
     });
+    setQuantityInput('0');
   };
 
-  const updateCartQty = (key: string, qty: number) => {
-    if (qty <= 0) {
-      setCart(prev => prev.filter(i => i.key !== key));
-      return;
-    }
-    setCart(prev => prev.map(i => (i.key === key ? { ...i, quantity: qty } : i)));
+  const removeExtraItem = (key: string) => {
+    setExtraItems(prev => prev.filter(i => i.key !== key));
   };
 
-  const cartSummary = useMemo(() => {
+  const orderSummary = useMemo(() => {
     let totalAmount = 0;
     let totalCogs = 0;
 
-    const items: SaleItem[] = cart.map((c, idx) => {
-      const latestProd = products.find(p => p.id === c.product.id) || c.product;
-      const unitPrice = getUnitPrice(latestProd, c.unitTier);
-      const unitCost = getUnitCost(latestProd, c.unitTier);
-      const piecesDeducted = getPiecesForUnit(latestProd, c.unitTier) * c.quantity;
+    const items: SaleItem[] = effectiveDraftList.map((c, idx) => {
+      const prod = products.find(p => p.id === c.productId) || products[0];
+      const unitPrice = getUnitPrice(prod, c.unitTier);
+      const unitCost = getUnitCost(prod, c.unitTier);
+      const piecesDeducted = getPiecesForUnit(prod, c.unitTier) * c.quantity;
       const subtotal = unitPrice * c.quantity;
       const cogs = unitCost * c.quantity;
       const profit = subtotal - cogs;
 
       const earliestBatch = batches
-        .filter(b => b.productId === latestProd.id && b.remainingPieces > 0)
+        .filter(b => b.productId === prod.id && b.remainingPieces > 0)
         .sort((a, b) => a.expiryDate.localeCompare(b.expiryDate))[0];
 
       totalAmount += subtotal;
@@ -164,9 +178,9 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
 
       return {
         id: `sli-${Date.now()}-${idx}`,
-        productId: latestProd.id,
-        productName: latestProd.name,
-        sku: latestProd.sku,
+        productId: prod.id,
+        productName: prod.name,
+        sku: prod.sku,
         unitTier: c.unitTier,
         quantity: c.quantity,
         piecesDeducted,
@@ -185,18 +199,18 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
       totalCogs,
       grossProfit: totalAmount - totalCogs
     };
-  }, [cart, products, batches]);
+  }, [effectiveDraftList, products, batches]);
 
   const handleCheckout = (e: React.FormEvent) => {
     e.preventDefault();
-    if (cartSummary.items.length === 0) return;
+    if (orderSummary.items.length === 0) return;
 
     const invNum = `INV-2026-${Math.floor(1010 + sales.length + Math.random() * 90)}`;
     const isCredit = paymentMethod === 'CREDIT';
     const paid = isCredit
-      ? Math.min(cartSummary.totalAmount, Math.max(0, Math.round(Number(creditPaidNow) || 0)))
-      : cartSummary.totalAmount;
-    const balanceDue = isCredit ? cartSummary.totalAmount - paid : 0;
+      ? Math.min(orderSummary.totalAmount, Math.max(0, Math.round(Number(creditPaidNow) || 0)))
+      : orderSummary.totalAmount;
+    const balanceDue = isCredit ? orderSummary.totalAmount - paid : 0;
 
     const transferStatus: TransferStatus =
       paymentMethod === 'TRANSFER'
@@ -205,18 +219,20 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
           : 'PENDING'
         : 'NOT_APPLICABLE';
 
+    const buyer = customerName.trim() || 'Walk-in Wholesale Customer';
+
     onCreateSale({
       invoiceNumber: invNum,
-      customerName: customerName.trim() || 'Walk-in Wholesale Buyer',
+      customerName: buyer,
       customerPhone: customerPhone.trim() || '—',
-      items: cartSummary.items,
-      totalAmount: cartSummary.totalAmount,
-      totalCogs: cartSummary.totalCogs,
-      grossProfit: cartSummary.grossProfit,
+      items: orderSummary.items,
+      totalAmount: orderSummary.totalAmount,
+      totalCogs: orderSummary.totalCogs,
+      grossProfit: orderSummary.grossProfit,
       paymentMethod,
       posTerminalRef: paymentMethod === 'POS' ? posTerminalRef : undefined,
       transferBank: paymentMethod === 'TRANSFER' ? transferBank : undefined,
-      transferSender: paymentMethod === 'TRANSFER' ? customerName : undefined,
+      transferSender: paymentMethod === 'TRANSFER' ? buyer : undefined,
       transferReference: paymentMethod === 'TRANSFER' ? transferRef : undefined,
       transferStatus,
       amountPaid: paid,
@@ -225,9 +241,14 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
       soldByName: activeUser.name
     });
 
-    setCart([]);
-    setSaleBanner(`Invoice ${invNum} (${formatNaira(cartSummary.totalAmount)}) recorded!`);
-    setTimeout(() => setSaleBanner(null), 4000);
+    setExtraItems([]);
+    setQuantityInput('1');
+    setCustomerName('');
+    setCustomerPhone('');
+    setSaleBanner(
+      `Sales Record ${invNum} (${formatNaira(orderSummary.totalAmount)}) logged by ${activeUser.name}!`
+    );
+    setTimeout(() => setSaleBanner(null), 5000);
   };
 
   const handleExpenseSubmit = (e: React.FormEvent) => {
@@ -243,65 +264,41 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
     setExpAmount('');
   };
 
-  const pendingTransfersCount = useMemo(
-    () => sales.filter(s => s.paymentMethod === 'TRANSFER' && s.transferStatus === 'PENDING').length,
-    [sales]
-  );
-
   return (
     <div className="space-y-6">
-      {/* Clean Sub-Nav Bar */}
+      {/* Sub-navigation switcher */}
       <div className="surface-card p-3.5 flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
           <button
-            onClick={() => setMode('POS')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
-              mode === 'POS'
+            onClick={() => setMode('RECORD_SALE')}
+            className={`px-4 py-2 rounded-lg text-xs sm:text-sm font-bold flex items-center gap-2 transition ${
+              mode === 'RECORD_SALE'
                 ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
                 : 'text-slate-600 dark:text-slate-400'
             }`}
           >
-            Sales Terminal
+            <FilePlus2 className="w-4 h-4 text-emerald-500" />
+            <span>Log a Sales Record & Invoices ({sales.length})</span>
           </button>
-          <button
-            onClick={() => setMode('INVOICES')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-              mode === 'INVOICES'
-                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-400'
-            }`}
-          >
-            <span>Invoices & Transfers ({sales.length})</span>
-            {pendingTransfersCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold">
-                {pendingTransfersCount}
-              </span>
-            )}
-          </button>
+
           <button
             onClick={() => setMode('EXPENSES')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
+            className={`px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition ${
               mode === 'EXPENSES'
                 ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
                 : 'text-slate-600 dark:text-slate-400'
             }`}
           >
-            Expenses ({expenses.length})
+            Warehouse Expenses ({expenses.length})
           </button>
         </div>
 
-        {mode === 'POS' && (
-          <div className="relative w-full sm:w-80">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-            <input
-              type="text"
-              value={posSearch}
-              onChange={e => setPosSearch(e.target.value)}
-              placeholder="Search product to add..."
-              className="input-clean w-full pl-10"
-            />
-          </div>
-        )}
+        <div className="text-xs text-slate-500 dark:text-slate-400">
+          Logged in as:{' '}
+          <strong className="text-slate-900 dark:text-white">
+            {activeUser.name} ({activeUser.role})
+          </strong>
+        </div>
       </div>
 
       {saleBanner && (
@@ -311,175 +308,181 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
         </div>
       )}
 
-      {mode === 'POS' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left: Spacious Product Cards (7 cols) */}
-          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4 content-start">
-            {filteredProducts.map(product => {
-              const bd = breakDownStockPieces(product.totalPiecesInStock, product);
-              return (
-                <div
-                  key={product.id}
-                  className="surface-card p-4 flex flex-col justify-between gap-4 hover:border-emerald-500/40 transition"
+      {mode === 'RECORD_SALE' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left Column: Clear, Step-by-Step "Log a Sales Record" Form (5 cols) */}
+          <div className="lg:col-span-5 surface-card p-6 space-y-5">
+            <div className="border-b border-slate-200 dark:border-slate-800 pb-3">
+              <h2 className="text-lg font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                <FilePlus2 className="w-5 h-5 text-emerald-500" />
+                <span>Log a New Sales Record</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Select product, unit (Carton/Pack/Piece), quantity, and payment method
+              </p>
+            </div>
+
+            <form onSubmit={handleCheckout} className="space-y-4 text-sm">
+              {/* Step 1: Select FMCG Product */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+                  1. Select FMCG Product
+                </label>
+                <select
+                  value={selectedProductId}
+                  onChange={e => setSelectedProductId(e.target.value)}
+                  className="input-clean w-full font-semibold"
                 >
-                  <div>
-                    <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                      <span className="font-mono text-emerald-600 dark:text-emerald-400">
-                        {product.sku}
-                      </span>
-                      <span className="font-medium">{bd.shortFormatted}</span>
-                    </div>
-                    <h4 className="font-bold text-slate-900 dark:text-white text-sm mt-1">
-                      {product.name}
-                    </h4>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => addToCart(product, 'CARTON', 1)}
-                      className="p-2.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-left transition"
-                    >
-                      <div className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-300">
-                        + Carton
-                      </div>
-                      <div className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
-                        {formatNaira(product.cartonPrice)}
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => addToCart(product, 'PACK', 1)}
-                      className="p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-950 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-left transition"
-                    >
-                      <div className="text-[10px] font-semibold uppercase text-slate-500 dark:text-slate-400">
-                        + Pack
-                      </div>
-                      <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5">
-                        {formatNaira(product.packPrice)}
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => addToCart(product, 'PIECE', 1)}
-                      className="p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-950 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-left transition"
-                    >
-                      <div className="text-[10px] font-semibold uppercase text-slate-500 dark:text-slate-400">
-                        + Piece
-                      </div>
-                      <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5">
-                        {formatNaira(product.piecePrice)}
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Right: Clean Order Summary Card (5 cols) */}
-          <div className="lg:col-span-5 surface-card p-6 flex flex-col justify-between space-y-5 h-fit sticky top-24">
-            <div className="space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <ShoppingCart className="w-4 h-4 text-emerald-500" />
-                  <span>Current Order ({cart.length})</span>
-                </h3>
-                {cart.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setCart([])}
-                    className="text-xs text-rose-500 hover:underline font-medium"
-                  >
-                    Clear
-                  </button>
-                )}
+                  {products.map(p => {
+                    const bd = breakDownStockPieces(p.totalPiecesInStock, p);
+                    return (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — {formatNaira(p.cartonPrice)}/Ctn ({bd.shortFormatted} left)
+                      </option>
+                    );
+                  })}
+                </select>
               </div>
 
-              {cartSummary.items.length === 0 ? (
-                <div className="py-10 text-center text-slate-400 text-sm">
-                  Select products on the left to build an invoice.
-                </div>
-              ) : (
-                <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
-                  {cart.map((c, idx) => {
-                    const line = cartSummary.items[idx];
-                    return (
-                      <div
-                        key={c.key}
-                        className="surface-muted p-3 flex items-center justify-between gap-2"
+              {/* Step 2: Select Unit Tier & Quantity */}
+              {selectedProduct && (
+                <div className="space-y-3">
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    2. Choose Packaging Unit & Quantity
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(
+                      [
+                        {
+                          tier: 'CARTON',
+                          label: 'Carton',
+                          price: selectedProduct.cartonPrice
+                        },
+                        {
+                          tier: 'PACK',
+                          label: 'Pack / Roll',
+                          price: selectedProduct.packPrice
+                        },
+                        {
+                          tier: 'PIECE',
+                          label: 'Single Piece',
+                          price: selectedProduct.piecePrice
+                        }
+                      ] as const
+                    ).map(u => (
+                      <button
+                        type="button"
+                        key={u.tier}
+                        onClick={() => setSelectedUnit(u.tier)}
+                        className={`p-2.5 rounded-xl border text-left transition ${
+                          selectedUnit === u.tier
+                            ? 'bg-emerald-500/15 border-emerald-500 text-slate-900 dark:text-white'
+                            : 'surface-muted text-slate-500 dark:text-slate-400'
+                        }`}
                       >
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                            {line.productName}
-                          </div>
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                            {line.unitTier} @ {formatNaira(line.unitPrice)}
-                          </div>
+                        <div className="text-[11px] font-semibold">{u.label}</div>
+                        <div className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
+                          {formatNaira(u.price)}
                         </div>
+                      </button>
+                    ))}
+                  </div>
 
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min={1}
-                            value={c.quantity}
-                            onChange={e => updateCartQty(c.key, Number(e.target.value))}
-                            className="input-clean !w-16 !h-8 !px-2 text-center font-bold !text-xs"
-                          />
-                          <div className="w-24 text-right font-bold text-xs text-slate-900 dark:text-white">
-                            {formatNaira(line.subtotal)}
-                          </div>
+                  <div className="flex items-end gap-2.5">
+                    <div className="flex-1">
+                      <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
+                        Quantity ({selectedUnit.toLowerCase()}s)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={quantityInput}
+                        onChange={e => setQuantityInput(e.target.value)}
+                        className="input-clean w-full font-bold !text-base"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddLineItem}
+                      className="btn-secondary !h-10 flex items-center gap-1.5 shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-emerald-500" />
+                      <span>Add Another Product</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Active Items Preview */}
+              {orderSummary.items.length > 0 && (
+                <div className="surface-muted p-3 space-y-2">
+                  <div className="text-[11px] font-bold uppercase text-slate-400">
+                    Items in This Sales Record ({orderSummary.items.length})
+                  </div>
+                  {orderSummary.items.map(item => (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between text-xs border-b border-slate-200/60 dark:border-slate-800/60 last:border-0 pb-1.5 last:pb-0"
+                    >
+                      <div>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                          {item.quantity} {item.unitTier}
+                        </span>{' '}
+                        × <span className="font-medium">{item.productName}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold">{formatNaira(item.subtotal)}</span>
+                        {extraItems.some(
+                          x => x.key === `${item.productId}-${item.unitTier}`
+                        ) && (
                           <button
                             type="button"
-                            onClick={() => updateCartQty(c.key, 0)}
-                            className="p-1 text-slate-400 hover:text-rose-500"
+                            onClick={() =>
+                              removeExtraItem(`${item.productId}-${item.unitTier}`)
+                            }
+                            className="text-slate-400 hover:text-rose-500"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                        </div>
+                        )}
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
               )}
-            </div>
 
-            <form
-              onSubmit={handleCheckout}
-              className="space-y-4 border-t border-slate-200 dark:border-slate-800 pt-4"
-            >
-              <div className="grid grid-cols-2 gap-3">
+              {/* Step 3: Customer Details */}
+              <div className="grid grid-cols-2 gap-3 pt-1">
                 <div>
-                  <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                    Customer Name
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    3. Buyer / Store Name
                   </label>
                   <input
                     type="text"
                     value={customerName}
                     onChange={e => setCustomerName(e.target.value)}
-                    className="input-clean w-full !h-9 !text-xs"
-                    required
+                    placeholder="e.g. Mama Nkechi Stores"
+                    className="input-clean w-full"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                    Phone
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    Buyer Phone (Optional)
                   </label>
                   <input
                     type="text"
                     value={customerPhone}
                     onChange={e => setCustomerPhone(e.target.value)}
-                    className="input-clean w-full !h-9 !text-xs"
+                    placeholder="0803..."
+                    className="input-clean w-full"
                   />
                 </div>
               </div>
 
-              {/* Payment Method */}
+              {/* Step 4: Payment Method */}
               <div>
-                <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1.5">
-                  Payment Method
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+                  4. Payment Method
                 </label>
                 <div className="grid grid-cols-4 gap-2">
                   {(
@@ -516,7 +519,7 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
                     <select
                       value={transferBank}
                       onChange={e => setTransferBank(e.target.value)}
-                      className="input-clean !h-8 !text-xs"
+                      className="input-clean !h-9 !text-xs"
                     >
                       {NIGERIAN_BANKS.map(b => (
                         <option key={b} value={b}>
@@ -529,7 +532,7 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
                       value={transferRef}
                       onChange={e => setTransferRef(e.target.value)}
                       placeholder="Transfer Ref"
-                      className="input-clean !h-8 !text-xs font-mono"
+                      className="input-clean !h-9 !text-xs font-mono"
                     />
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -548,12 +551,12 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
               {paymentMethod === 'CREDIT' && (
                 <div className="surface-muted p-3 text-xs flex items-center justify-between">
                   <span className="font-medium text-slate-600 dark:text-slate-300">
-                    Deposit Paid Now (₦):
+                    Amount Paid Now (₦):
                   </span>
                   <input
                     type="number"
                     min={0}
-                    max={cartSummary.totalAmount}
+                    max={orderSummary.totalAmount}
                     value={creditPaidNow}
                     onChange={e => setCreditPaidNow(e.target.value)}
                     className="input-clean !w-32 !h-8 text-right font-bold"
@@ -561,131 +564,139 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
                 </div>
               )}
 
-              <div className="flex items-baseline justify-between pt-2">
-                <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
-                  Total Amount
+              {/* Total & Submit */}
+              <div className="flex items-baseline justify-between pt-2 border-t border-slate-200 dark:border-slate-800">
+                <span className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Total Sales Amount
                 </span>
                 <span className="text-2xl font-black text-slate-900 dark:text-white">
-                  {formatNaira(cartSummary.totalAmount)}
+                  {formatNaira(orderSummary.totalAmount)}
                 </span>
               </div>
 
               <button
                 type="submit"
-                disabled={cartSummary.items.length === 0}
-                className="btn-primary w-full !py-3 flex items-center justify-center gap-2 disabled:opacity-40"
+                disabled={orderSummary.items.length === 0}
+                className="btn-primary w-full !py-3.5 !text-base flex items-center justify-center gap-2 disabled:opacity-40"
               >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Complete Sale</span>
+                <CheckCircle2 className="w-5 h-5" />
+                <span>Save Sales Record ({formatNaira(orderSummary.totalAmount)})</span>
               </button>
             </form>
           </div>
-        </div>
-      )}
 
-      {mode === 'INVOICES' && (
-        <div className="surface-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/80 dark:bg-slate-950/60 border-b border-slate-200/80 dark:border-slate-800 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  <th className="py-4 px-5">Invoice</th>
-                  <th className="py-4 px-5">Customer</th>
-                  <th className="py-4 px-5">Items</th>
-                  <th className="py-4 px-5">Amount</th>
-                  <th className="py-4 px-5">Payment Status</th>
-                  <th className="py-4 px-5 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800/70 text-sm">
-                {sales.map(sale => (
-                  <tr
-                    key={sale.id}
-                    className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30 transition"
-                  >
-                    <td className="py-4 px-5">
-                      <div className="font-mono font-bold text-slate-900 dark:text-white">
-                        {sale.invoiceNumber}
-                      </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        {new Date(sale.createdAt).toLocaleDateString('en-NG')} • {sale.soldByName}
-                      </div>
-                    </td>
+          {/* Right Column: Recent Sales Records Table (7 cols) */}
+          <div className="lg:col-span-7 surface-card overflow-hidden">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Receipt className="w-4 h-4 text-emerald-500" />
+                  <span>Logged Sales Records ({sales.length})</span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  All warehouse sales with staff attribution and payment confirmation
+                </p>
+              </div>
+            </div>
 
-                    <td className="py-4 px-5">
-                      <div className="font-semibold text-slate-900 dark:text-white">
-                        {sale.customerName}
-                      </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        {sale.customerPhone}
-                      </div>
-                    </td>
-
-                    <td className="py-4 px-5 text-xs text-slate-600 dark:text-slate-300 space-y-0.5">
-                      {sale.items.map(item => (
-                        <div key={item.id}>
-                          <strong>
-                            {item.quantity} {item.unitTier}
-                          </strong>{' '}
-                          × {item.productName}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50/80 dark:bg-slate-950/60 border-b border-slate-200/80 dark:border-slate-800 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    <th className="py-3.5 px-4">Invoice & Staff</th>
+                    <th className="py-3.5 px-4">Customer & Items</th>
+                    <th className="py-3.5 px-4">Total</th>
+                    <th className="py-3.5 px-4">Payment</th>
+                    <th className="py-3.5 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800/70 text-sm">
+                  {sales.map(sale => (
+                    <tr
+                      key={sale.id}
+                      className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30 transition"
+                    >
+                      <td className="py-3.5 px-4">
+                        <div className="font-mono font-bold text-slate-900 dark:text-white text-xs">
+                          {sale.invoiceNumber}
                         </div>
-                      ))}
-                    </td>
+                        <div className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                          By {sale.soldByName}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          {new Date(sale.createdAt).toLocaleString('en-NG')}
+                        </div>
+                      </td>
 
-                    <td className="py-4 px-5 font-bold text-slate-900 dark:text-white">
-                      {formatNaira(sale.totalAmount)}
-                    </td>
+                      <td className="py-3.5 px-4">
+                        <div className="font-semibold text-slate-900 dark:text-white text-xs">
+                          {sale.customerName}
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5 mt-0.5">
+                          {sale.items.map(item => (
+                            <div key={item.id}>
+                              <strong>
+                                {item.quantity} {item.unitTier}
+                              </strong>{' '}
+                              × {item.productName}
+                            </div>
+                          ))}
+                        </div>
+                      </td>
 
-                    <td className="py-4 px-5">
-                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 mr-1.5">
-                        {sale.paymentMethod}
-                      </span>
-                      {sale.paymentMethod === 'TRANSFER' && (
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                            sale.transferStatus === 'CONFIRMED'
-                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                              : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                          }`}
-                        >
-                          {sale.transferStatus}
+                      <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">
+                        {formatNaira(sale.totalAmount)}
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 block w-fit">
+                          {sale.paymentMethod}
                         </span>
-                      )}
-                      {sale.balanceDue > 0 && (
-                        <div className="text-xs font-semibold text-rose-600 dark:text-rose-400 mt-1">
-                          Due: {formatNaira(sale.balanceDue)}
-                        </div>
-                      )}
-                    </td>
-
-                    <td className="py-4 px-5 text-right">
-                      {sale.paymentMethod === 'TRANSFER' &&
-                        sale.transferStatus === 'PENDING' && (
-                          <button
-                            onClick={() => onConfirmTransfer(sale.id)}
-                            className="btn-primary !py-1.5 !px-3 !text-xs"
+                        {sale.paymentMethod === 'TRANSFER' && (
+                          <span
+                            className={`inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              sale.transferStatus === 'CONFIRMED'
+                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                            }`}
                           >
-                            Confirm Transfer
+                            {sale.transferStatus}
+                          </span>
+                        )}
+                        {sale.balanceDue > 0 && (
+                          <div className="text-xs font-semibold text-rose-600 dark:text-rose-400 mt-1">
+                            Due: {formatNaira(sale.balanceDue)}
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-4 text-right">
+                        {sale.paymentMethod === 'TRANSFER' &&
+                          sale.transferStatus === 'PENDING' && (
+                            <button
+                              onClick={() => onConfirmTransfer(sale.id)}
+                              className="btn-primary !py-1.5 !px-2.5 !text-xs"
+                            >
+                              Confirm Alert
+                            </button>
+                          )}
+                        {sale.balanceDue > 0 && (
+                          <button
+                            onClick={() => onSettleCredit(sale.id, sale.balanceDue)}
+                            className="btn-secondary !py-1.5 !px-2.5 !text-xs"
+                          >
+                            Mark Paid
                           </button>
                         )}
-                      {sale.balanceDue > 0 && (
-                        <button
-                          onClick={() => onSettleCredit(sale.id, sale.balanceDue)}
-                          className="btn-secondary !py-1.5 !px-3 !text-xs"
-                        >
-                          Mark Paid
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
-      )}
-
-      {mode === 'EXPENSES' && (
+      ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 surface-card p-6 space-y-4 h-fit">
             <h3 className="text-base font-bold text-slate-900 dark:text-white">
@@ -765,7 +776,8 @@ export const WarehousePosAndExpensesView: React.FC<WarehousePosAndExpensesViewPr
                       {exp.description}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      By {exp.recordedByName} • {new Date(exp.createdAt).toLocaleDateString('en-NG')}
+                      By {exp.recordedByName} •{' '}
+                      {new Date(exp.createdAt).toLocaleDateString('en-NG')}
                     </div>
                   </div>
                   <div className="text-base font-bold text-rose-600 dark:text-rose-400 shrink-0">

@@ -21,6 +21,7 @@ import { WarehousePosAndExpensesView } from './components/WarehousePosAndExpense
 import { PriceAuditTrailView } from './components/PriceAuditTrailView';
 import { ReportsAndAlertsHubView } from './components/ReportsAndAlertsHubView';
 import { PriceModifyModal } from './components/PriceModifyModal';
+import { StaffLoginScreen } from './components/StaffLoginScreen';
 import {
   LayoutDashboard,
   Package,
@@ -30,10 +31,12 @@ import {
   Wifi,
   WifiOff,
   Sun,
-  Moon
+  Moon,
+  LogOut,
+  PlusCircle
 } from 'lucide-react';
 
-type ActiveTab = 'DASHBOARD' | 'INVENTORY' | 'POS' | 'AUDIT' | 'REPORTS';
+type ActiveTab = 'DASHBOARD' | 'POS' | 'INVENTORY' | 'AUDIT' | 'REPORTS';
 type ThemeMode = 'light' | 'dark';
 
 const THEME_STORAGE_KEY = 'fmcg_warehouse_theme_v1';
@@ -43,6 +46,7 @@ export const App: React.FC = () => {
   const [engineStatus, setEngineStatus] = useState(() => offlineEngine.getStatus());
   const [activeTab, setActiveTab] = useState<ActiveTab>('DASHBOARD');
   const [activeUserId, setActiveUserId] = useState<string>('usr-ceo-01');
+  const [showLoginScreen, setShowLoginScreen] = useState<boolean>(false);
   const [priceModalProduct, setPriceModalProduct] = useState<Product | null>(null);
 
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -76,6 +80,17 @@ export const App: React.FC = () => {
     () => snapshot.users.find(u => u.id === activeUserId) || snapshot.users[0],
     [snapshot.users, activeUserId]
   );
+
+  const handleSelectActiveUser = (user: User) => {
+    setActiveUserId(user.id);
+    setShowLoginScreen(false);
+    // Automatically route STAFF directly to the Record a Sale screen!
+    if (user.role === 'STAFF') {
+      setActiveTab('POS');
+    } else {
+      setActiveTab('DASHBOARD');
+    }
+  };
 
   const analytics = useMemo(
     () =>
@@ -308,69 +323,100 @@ export const App: React.FC = () => {
 
   const isOffline = engineStatus.networkHealth === 'OFFLINE_LOCAL_MODE';
 
+  if (showLoginScreen) {
+    return (
+      <StaffLoginScreen
+        users={snapshot.users}
+        theme={theme}
+        onToggleTheme={setTheme}
+        onLoginSuccess={handleSelectActiveUser}
+      />
+    );
+  }
+
+  // Filter tabs based on role so Staff see a focused Sales & Stock workspace
+  const visibleTabs = (
+    [
+      ...(activeUser.role !== 'STAFF'
+        ? [{ id: 'DASHBOARD' as const, label: 'CEO Overview', icon: LayoutDashboard }]
+        : []),
+      { id: 'POS' as const, label: 'Record a Sale', icon: ShoppingCart },
+      {
+        id: 'INVENTORY' as const,
+        label: 'Inventory & Prices',
+        icon: Package,
+        badge: lowStockCount > 0 ? lowStockCount : undefined
+      },
+      ...(activeUser.role !== 'STAFF'
+        ? [
+            { id: 'AUDIT' as const, label: 'Price Audit', icon: Fingerprint },
+            { id: 'REPORTS' as const, label: 'Reports', icon: MessageSquare }
+          ]
+        : [])
+    ]
+  );
+
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Clean, Uncluttered Top Bar */}
-      <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
-          {/* Brand */}
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="w-9 h-9 rounded-xl bg-emerald-600 dark:bg-emerald-500 flex items-center justify-center text-white dark:text-slate-950 font-black text-sm">
-              OG
+      {/* Clean Header */}
+      <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
+        <div className="max-w-7xl mx-auto px-6 py-3 flex flex-wrap items-center justify-between gap-4">
+          {/* Left: Brand & Navigation */}
+          <div className="flex items-center gap-6 flex-wrap">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-emerald-600 dark:bg-emerald-500 flex items-center justify-center text-white dark:text-slate-950 font-black text-sm">
+                OG
+              </div>
+              <span className="font-bold text-base text-slate-900 dark:text-white tracking-tight">
+                Ogunleye FMCG
+              </span>
             </div>
-            <span className="font-bold text-base text-slate-900 dark:text-white tracking-tight hidden sm:inline">
-              Ogunleye FMCG
-            </span>
+
+            <nav className="flex items-center gap-1 overflow-x-auto">
+              {visibleTabs.map(tab => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 whitespace-nowrap transition ${
+                      isActive
+                        ? 'bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span>{tab.label}</span>
+                    {'badge' in tab && tab.badge && (
+                      <span
+                        className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                          isActive
+                            ? 'bg-white/20 text-white dark:bg-slate-950/20 dark:text-slate-950'
+                            : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                        }`}
+                      >
+                        {tab.badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
           </div>
 
-          {/* Center Navigation Tabs */}
-          <nav className="flex items-center gap-1 overflow-x-auto">
-            {(
-              [
-                { id: 'DASHBOARD', label: 'Overview', icon: LayoutDashboard },
-                {
-                  id: 'INVENTORY',
-                  label: 'Inventory',
-                  icon: Package,
-                  badge: lowStockCount > 0 ? lowStockCount : undefined
-                },
-                { id: 'POS', label: 'Sales & Expenses', icon: ShoppingCart },
-                { id: 'AUDIT', label: 'Price Audit', icon: Fingerprint },
-                { id: 'REPORTS', label: 'Reports', icon: MessageSquare }
-              ] as const
-            ).map(tab => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 whitespace-nowrap transition ${
-                    isActive
-                      ? 'bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 shadow-sm'
-                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/70'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span>{tab.label}</span>
-                  {'badge' in tab && tab.badge && (
-                    <span
-                      className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                        isActive
-                          ? 'bg-white/20 text-white dark:bg-slate-950/20 dark:text-slate-950'
-                          : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
-                      }`}
-                    >
-                      {tab.badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </nav>
+          {/* Right Utilities: + Record Sale CTA, Theme Switcher, Offline Toggle, Staff Login Switcher */}
+          <div className="flex items-center gap-2.5">
+            {activeTab !== 'POS' && (
+              <button
+                onClick={() => setActiveTab('POS')}
+                className="btn-primary !py-2 !px-3.5 !text-xs flex items-center gap-1.5"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>+ Record a Sale</span>
+              </button>
+            )}
 
-          {/* Right Utilities: Theme Switcher + Offline Toggle + Staff Switcher */}
-          <div className="flex items-center gap-2.5 shrink-0">
             {/* Light / Dark Theme Switcher */}
             <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
               <button
@@ -380,7 +426,7 @@ export const App: React.FC = () => {
                     ? 'bg-white text-slate-900 shadow-sm'
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
-                title="Switch to Light Theme"
+                title="Light Theme"
               >
                 <Sun className="w-3.5 h-3.5 text-amber-500" />
                 <span className="hidden md:inline">Light</span>
@@ -392,7 +438,7 @@ export const App: React.FC = () => {
                     ? 'bg-slate-800 text-white shadow-sm'
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
-                title="Switch to Dark Theme"
+                title="Dark Theme"
               >
                 <Moon className="w-3.5 h-3.5 text-sky-400" />
                 <span className="hidden md:inline">Dark</span>
@@ -422,24 +468,25 @@ export const App: React.FC = () => {
               )}
             </button>
 
-            {/* Compact Staff Account Selector */}
-            <select
-              value={activeUserId}
-              onChange={e => setActiveUserId(e.target.value)}
-              className="input-clean !h-9 !px-2.5 !text-xs font-semibold !w-auto max-w-[165px]"
-              title="Switch active staff or CEO account"
+            {/* Staff / CEO Account & Sign In Button */}
+            <button
+              onClick={() => setShowLoginScreen(true)}
+              className="btn-secondary !h-9 !px-3 !text-xs flex items-center gap-1.5"
+              title="Switch Staff / CEO Account with PIN"
             >
-              {snapshot.users.map(u => (
-                <option key={u.id} value={u.id}>
-                  {u.name.split(' ')[0]} ({u.role})
-                </option>
-              ))}
-            </select>
+              <span className="font-bold text-slate-900 dark:text-white">
+                {activeUser.name.split(' ')[0]}
+              </span>
+              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                {activeUser.role}
+              </span>
+              <LogOut className="w-3.5 h-3.5 text-slate-400 ml-0.5" />
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Generous, Breathable Main Workspace */}
+      {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-8">
         {activeTab === 'DASHBOARD' && (
           <CeoDashboardAndPatternsView
@@ -448,17 +495,6 @@ export const App: React.FC = () => {
             auditLogs={snapshot.priceAuditLogs}
             onNavigateTab={tab => setActiveTab(tab)}
             onOpenPriceModal={prod => setPriceModalProduct(prod)}
-          />
-        )}
-
-        {activeTab === 'INVENTORY' && (
-          <InventoryAndBatchesView
-            products={snapshot.products}
-            batches={snapshot.batches}
-            activeUser={activeUser}
-            onOpenPriceModal={prod => setPriceModalProduct(prod)}
-            onReceiveBatch={handleReceiveBatch}
-            onCreateProduct={handleCreateProduct}
           />
         )}
 
@@ -473,6 +509,17 @@ export const App: React.FC = () => {
             onConfirmTransfer={handleConfirmTransfer}
             onSettleCredit={handleSettleCredit}
             onCreateExpense={handleCreateExpense}
+          />
+        )}
+
+        {activeTab === 'INVENTORY' && (
+          <InventoryAndBatchesView
+            products={snapshot.products}
+            batches={snapshot.batches}
+            activeUser={activeUser}
+            onOpenPriceModal={prod => setPriceModalProduct(prod)}
+            onReceiveBatch={handleReceiveBatch}
+            onCreateProduct={handleCreateProduct}
           />
         )}
 
